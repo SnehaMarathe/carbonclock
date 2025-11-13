@@ -3,12 +3,9 @@ import os
 import streamlit as st
 from typing import Any, Dict, List, Optional
 import requests
+import time
 
-# If not installed yet, add to requirements.txt:
-# streamlit-autorefresh
-from streamlit_autorefresh import st_autorefresh
-
-# ==== your constants ====
+# ==== constants ====
 BASE_URL = "https://apis.intangles.com"
 PATH     = "/vehicle/fuel_consumed"
 SAVINGS_PER_KG = 0.926
@@ -23,7 +20,7 @@ PREFERRED_KEYS = [
     "fuel",
 ]
 
-# ==== your helpers (unchanged) ====
+# ==== helpers ====
 def build_headers(token: str) -> Dict[str, str]:
     return {
         "Accept": "application/json, text/plain, */*",
@@ -53,8 +50,7 @@ def iter_payload_rows(payload: Any):
             if isinstance(val, dict):
                 yield val
                 return
-        if any(isinstance(v, (int, float, str, dict, list)) for v in payload.values()):
-            yield payload
+        yield payload
 
 def walk_keys(obj: Any, prefix: str = ""):
     if isinstance(obj, dict):
@@ -68,113 +64,84 @@ def walk_keys(obj: Any, prefix: str = ""):
         yield prefix, obj
 
 def detect_fuel_key(sample_rows: List[Dict[str, Any]]) -> Optional[str]:
-    candidates: Dict[str, None] = {}
-    for row in sample_rows:
-        for k, v in walk_keys(row):
-            if not k:
-                continue
-            if isinstance(v, (int, float, str)) and v is not None:
-                candidates[k.lower()] = None
-    lowers = set(candidates.keys())
+    candidates = {k.lower() for row in sample_rows for k, v in walk_keys(row)
+                  if isinstance(v, (int, float, str))}
     for pref in PREFERRED_KEYS:
-        if pref.lower() in lowers:
+        if pref.lower() in candidates:
             return pref
-    for k in lowers:
+    for k in candidates:
         if "fuel" in k and ("consum" in k or "total" in k):
             return k
     return None
 
-def get_value_by_dotted(row: Dict[str, Any], dotted: str) -> Optional[float]:
+def get_value_by_dotted(row, dotted):
     parts = dotted.split(".")
-    cur: Any = row
+    cur = row
     for p in parts:
         if isinstance(cur, dict) and p in cur:
             cur = cur[p]
         else:
-            found = False
-            for k, v in walk_keys(cur):
-                if k.lower() == dotted.lower():
-                    cur = v
-                    found = True
-                    break
-            if not found:
-                return None
+            return None
     try:
         if cur is None:
             return None
         if isinstance(cur, (int, float)):
             return float(cur)
         if isinstance(cur, str):
-            s = cur.strip().replace(",", "")
+            s = cur.replace(",", "").strip()
             return float(s) if s else None
-    except Exception:
+    except:
         return None
-    return None
 
-def lng_to_kg(v: float, unit: str, density_kg_per_L: float) -> float:
-    if unit.lower() == "kg":
-        return float(v)
-    if unit.lower() == "l":
-        return float(v) * float(density_kg_per_L)
-    raise ValueError("Invalid LNG unit")
+def lng_to_kg(v, unit, density):
+    return v if unit.lower() == "kg" else v * density
 
-def fetch_and_sum(
-    token: str,
-    acc_id: str,
-    spec_ids: str,
-    psize: int,
-    lang: str,
-    no_default_fields: bool,
-    proj: str,
-    groups: str,
-    lastloc: bool,
-    lng_unit: str,
-    lng_density: float,
-) -> float:
+# ====== API fetch with TTL cache (smooth refresh) ======
+@st.cache_data(ttl=5)
+def fetch_api_cached(token, acc_id, spec_ids, psize, lang, no_def,
+                     proj, groups, lastloc, lng_unit, lng_density):
+
     url = BASE_URL + PATH
     headers = build_headers(token)
+
     total_input = 0.0
-    fuel_key: Optional[str] = None
+    fuel_key = None
     pnum = 1
+
     with requests.Session() as s:
         while True:
             params = {
-                "pnum": pnum,
-                "psize": psize,
-                "no_default_fields": str(no_default_fields).lower(),
-                "proj": proj,
-                "spec_ids": spec_ids,
+                "pnum": pnum, "psize": psize,
+                "no_default_fields": str(no_def).lower(),
+                "proj": proj, "spec_ids": spec_ids,
                 "groups": groups,
                 "lastloc": str(lastloc).lower(),
-                "acc_id": acc_id,
-                "lang": lang,
+                "acc_id": acc_id, "lang": lang,
             }
-            resp = s.get(url, params=params, headers=headers, timeout=45)
-            resp.raise_for_status()
-            payload = resp.json()
-            rows = list(iter_payload_rows(payload))
+            r = s.get(url, params=params, headers=headers, timeout=45)
+            r.raise_for_status()
+            rows = list(iter_payload_rows(r.json()))
             if not rows:
                 break
+
             if fuel_key is None:
-                sample = rows[:10]
-                detected = detect_fuel_key(sample)
-                if not detected:
-                    raise RuntimeError("Could not detect a fuel field in response.")
-                fuel_key = detected
-            page_sum = 0.0
-            for r in rows:
-                v = get_value_by_dotted(r, fuel_key)
-                if v is not None:
-                    page_sum += v
-            total_input += page_sum
+                fuel_key = detect_fuel_key(rows[:10])
+                if not fuel_key:
+                    raise RuntimeError("Fuel field not found")
+
+            total_input += sum(
+                v for v in (get_value_by_dotted(rw, fuel_key) for rw in rows) if v
+            )
+
             if len(rows) < psize:
                 break
             pnum += 1
-    total_lng_kg = lng_to_kg(total_input, lng_unit, lng_density)
-    total_tco2_saved = (total_lng_kg * SAVINGS_PER_KG) / 1000.0
-    return total_tco2_saved
 
-# ==== Streamlit UI ====
+    total_lng_kg = lng_to_kg(total_input, lng_unit, lng_density)
+    return (total_lng_kg * SAVINGS_PER_KG) / 1000.0
+
+
+# ===== UI =====
 st.set_page_config(layout="wide")
 st.title("Blue Energy Motors – Real-Time CO₂ Saved")
 
@@ -182,53 +149,37 @@ with st.sidebar:
     st.header("Intangles API")
     token    = st.text_input("intangles-user-token", value=os.getenv("INTANGLES_TOKEN", ""), type="password")
     acc_id   = st.text_input("acc_id", value="962759605811675136")
-    spec_ids = st.text_input("spec_ids (comma-separated)", value="966986020958502912,969208267156750336")
-    psize    = st.number_input("psize", min_value=50, max_value=2000, value=300, step=50)
+    spec_ids = st.text_input("spec_ids", value="966986020958502912,969208267156750336")
+    psize    = st.number_input("psize", 50, 2000, 300, 50)
     lang     = st.text_input("lang", value="en")
     no_def   = st.checkbox("no_default_fields", value=True)
     proj     = st.text_input("proj", value="total_fuel_consumed")
     groups   = st.text_input("groups", value="")
     lastloc  = st.checkbox("lastloc", value=True)
-
-    lng_unit    = st.selectbox("LNG unit returned", ["kg", "L"], index=0)
-    lng_density = st.number_input("LNG density (kg/L if unit = L)", value=0.45, step=0.01, format="%.2f")
-
-    # Keep this slider, but now it controls st_autorefresh interval
-    refresh = st.slider("Refresh every (seconds)", 0.3, 5.0, 0.5, 0.1)
-    ui_offset = st.number_input("UI offset (tons, added before display)", value=1000.0, step=100.0)
-
-# auto-refresh the whole app at the chosen interval (in ms)
-st_autorefresh(interval=int(refresh * 1000), key="api_refresh")
-
-# sticky state: never decrease
-if "latest_val" not in st.session_state:
-    st.session_state.latest_val = 0.0
+    lng_unit    = st.selectbox("LNG unit", ["kg", "L"], index=0)
+    lng_density = st.number_input("LNG density", value=0.45, step=0.01)
+    refresh_sec = st.slider("Refresh every (seconds)", 1, 30, 5)
+    ui_offset   = st.number_input("UI offset (tons)", value=1000.0)
 
 status = st.empty()
 
-# fetch (once per run)
 if token:
     try:
-        v = fetch_and_sum(
-            token=token,
-            acc_id=acc_id,
-            spec_ids=spec_ids,
-            psize=int(psize),
-            lang=lang,
-            no_default_fields=no_def,
-            proj=proj,
-            groups=groups,
-            lastloc=lastloc,
-            lng_unit=lng_unit,
-            lng_density=float(lng_density),
+        v = fetch_api_cached(
+            token, acc_id, spec_ids, int(psize), lang, no_def,
+            proj, groups, lastloc, lng_unit, float(lng_density)
         )
-        st.session_state.latest_val = max(st.session_state.latest_val, v)
-        status.info("Live from Intangles API ✅")
+        status.info("Live from Intangles API")
     except Exception as e:
-        status.warning(f"API error — showing last known value, will retry: {e}")
+        status.error(f"API error: {e}")
+        v = 0
 else:
-    status.warning("Enter your Intangles token in the sidebar.")
+    status.warning("Enter your token to start.")
+    v = 0
 
-# display (+ offset)
-val = st.session_state.latest_val + float(ui_offset)
-st.metric(label="Total tCO₂ saved (tons)", value=f"{val:,.3f}")
+# display
+st.metric("Total tCO₂ saved (tons)", f"{v + ui_offset:,.3f}")
+
+# soft refresh (no visual flashing)
+time.sleep(refresh_sec)
+st.rerun()
