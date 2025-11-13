@@ -32,11 +32,11 @@ GROUPS      = ""
 LASTLOC     = True
 LNG_UNIT    = "kg"
 LNG_DENSITY = 0.45
-UI_OFFSET   = 1000.0   # tons added before display
+UI_OFFSET   = 000.0   # tons added before display
 
 LAST_VALUE = None
 LAST_TS    = 0.0
-CACHE_TTL  = 10.0  # seconds
+CACHE_TTL  = 1.0  # seconds
 
 
 # ==== helpers (same logic as your Streamlit app) ====
