@@ -1,5 +1,6 @@
 import os
 import time
+import threading
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -32,14 +33,14 @@ GROUPS      = ""
 LASTLOC     = True
 LNG_UNIT    = "kg"
 LNG_DENSITY = 0.45
-UI_OFFSET   = 000.0   # tons added before display
+UI_OFFSET   = 0.0    # tons added before display
 
-LAST_VALUE = None
+# cache shared by all requests
+LAST_VALUE: Optional[float] = None
 LAST_TS    = 0.0
-CACHE_TTL  = 1.0  # seconds
+CACHE_TTL  = 5.0      # seconds between background refreshes
 
-
-# ==== helpers (same logic as your Streamlit app) ====
+# ==== helpers ====
 def build_headers(token: str) -> Dict[str, str]:
     return {
         "Accept": "application/json, text/plain, */*",
@@ -185,46 +186,54 @@ def fetch_and_sum(
     total_tco2_saved = (total_lng_kg * SAVINGS_PER_KG) / 1000.0
     return total_tco2_saved
 
-# ==== Flask app ====
-app = Flask(__name__)  # uses templates/ directory by default
+# ==== background updater ====
+def background_updater():
+    global LAST_VALUE, LAST_TS
+    while True:
+        if INTANGLES_TOKEN:
+            try:
+                raw_value = fetch_and_sum(
+                    INTANGLES_TOKEN,
+                    ACC_ID,
+                    SPEC_IDS,
+                    PSIZE,
+                    LANG,
+                    NO_DEF,
+                    PROJ,
+                    GROUPS,
+                    LASTLOC,
+                    LNG_UNIT,
+                    LNG_DENSITY,
+                )
+                val = raw_value + UI_OFFSET
+                LAST_VALUE = val
+                LAST_TS = time.time()
+                print("Updated LAST_VALUE:", LAST_VALUE)
+            except Exception as e:
+                print("Intangles API error in background updater:", repr(e))
+        else:
+            print("INTANGLES_TOKEN not set; background updater idle")
+        time.sleep(CACHE_TTL)
 
+app = Flask(__name__)
+
+@app.before_first_request
+def start_background_thread():
+    t = threading.Thread(target=background_updater, daemon=True)
+    t.start()
+
+# ==== routes ====
 @app.route("/")
 def index():
     return render_template("index.html")
 
 @app.route("/value")
 def get_value():
-    global LAST_VALUE, LAST_TS
-
-    if not INTANGLES_TOKEN:
-        return jsonify({"error": "INTANGLES_TOKEN not set on server"}), 500
-
-    now = time.time()
-    if LAST_VALUE is not None and (now - LAST_TS) < CACHE_TTL:
-        val = LAST_VALUE
-    else:
-        try:
-            raw_value = fetch_and_sum(
-                INTANGLES_TOKEN,
-                ACC_ID,
-                SPEC_IDS,
-                PSIZE,
-                LANG,
-                NO_DEF,
-                PROJ,
-                GROUPS,
-                LASTLOC,
-                LNG_UNIT,
-                LNG_DENSITY,
-            )
-            val = raw_value + UI_OFFSET
-            LAST_VALUE = val
-            LAST_TS = now
-        except Exception as e:
-            print("Intangles API error:", repr(e))
-            return jsonify({"error": "API error", "detail": str(e)}), 500
-
-    return jsonify({"value": round(val, 3)})
+    # Always fast, just returns cached value
+    if LAST_VALUE is None:
+        # Background thread hasn't fetched anything yet
+        return jsonify({"error": "Value not ready yet"}), 503
+    return jsonify({"value": round(LAST_VALUE, 3)})
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
