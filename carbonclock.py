@@ -35,7 +35,7 @@ groups      = ""
 lastloc     = True
 lng_unit    = "kg"
 lng_density = 0.45
-refresh     = 1.0   # seconds
+refresh     = 1.0   # seconds between updates
 ui_offset   = 1000.0
 
 # ========= CSS: MAX font size + center alignment =========
@@ -116,8 +116,12 @@ def walk_keys(obj: Any, prefix=""):
         yield prefix, obj
 
 def detect_fuel_key(sample_rows):
-    candidates = {k.lower() for row in sample_rows for k, v in walk_keys(row)
-                  if isinstance(v, (int, float, str))}
+    candidates = {
+        k.lower()
+        for row in sample_rows
+        for k, v in walk_keys(row)
+        if isinstance(v, (int, float, str))
+    }
     for pref in PREFERRED_KEYS:
         if pref.lower() in candidates:
             return pref
@@ -147,7 +151,7 @@ def get_value_by_dotted(row, dotted):
         if isinstance(cur, str):
             s = cur.strip().replace(",", "")
             return float(s) if s else None
-    except:
+    except Exception:
         return None
     return None
 
@@ -193,7 +197,6 @@ def fetch_and_sum(token, acc_id, spec_ids, psize, lang, no_def,
 label_box = st.empty()
 number_box = st.empty()
 
-# If token is missing, show message and stop (no rerun loop)
 if not token:
     label_box.markdown(
         "<div class='label-text'>INTANGLES_TOKEN missing</div>",
@@ -205,32 +208,29 @@ if not token:
     )
     st.stop()
 
-# keep latest value across reruns so it never decreases
-if "latest_val" not in st.session_state:
-    st.session_state.latest_val = 0.0
+latest_val = 0.0  # local “never decrease within this run”
 
-# ========= One update per run =========
-try:
-    v = fetch_and_sum(
-        token, acc_id, spec_ids, psize, lang, no_def,
-        proj, groups, lastloc, lng_unit, lng_density
+# ========= Smooth update loop (no rerun, no blinking) =========
+while True:
+    try:
+        v = fetch_and_sum(
+            token, acc_id, spec_ids, psize, lang, no_def,
+            proj, groups, lastloc, lng_unit, lng_density
+        )
+        latest_val = max(latest_val, v)
+    except Exception as e:
+        print("Intangles API error:", e)
+
+    val = latest_val + ui_offset
+
+    label_box.markdown(
+        "<div class='label-text'>Blue Energy Motors Total tCO₂ saved (tons)</div>",
+        unsafe_allow_html=True
     )
-    st.session_state.latest_val = max(st.session_state.latest_val, v)
-except Exception as e:
-    print("Intangles API error:", e)
 
-val = st.session_state.latest_val + ui_offset
+    number_box.markdown(
+        f"<div class='big-number'>{val:,.3f}</div>",
+        unsafe_allow_html=True
+    )
 
-label_box.markdown(
-    "<div class='label-text'>Blue Energy Motors Total tCO₂ saved (tons)</div>",
-    unsafe_allow_html=True
-)
-
-number_box.markdown(
-    f"<div class='big-number'>{val:,.3f}</div>",
-    unsafe_allow_html=True
-)
-
-# ========= schedule next run =========
-time.sleep(refresh)
-st.rerun()
+    time.sleep(refresh)
