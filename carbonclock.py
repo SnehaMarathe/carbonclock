@@ -5,6 +5,9 @@ import streamlit as st
 from typing import Any, Dict, List, Optional
 import requests
 
+# ===== Streamlit page config =====
+st.set_page_config(layout="wide")
+
 # ==== constants ====
 BASE_URL = "https://apis.intangles.com"
 PATH     = "/vehicle/fuel_consumed"
@@ -32,7 +35,7 @@ groups      = ""
 lastloc     = True
 lng_unit    = "kg"
 lng_density = 0.45
-refresh     = 1.0
+refresh     = 1.0   # seconds
 ui_offset   = 1000.0
 
 # ========= CSS: MAX font size + center alignment =========
@@ -133,11 +136,14 @@ def get_value_by_dotted(row, dotted):
             found = False
             for k, v in walk_keys(cur):
                 if k.lower() == dotted.lower():
-                    cur = v; found = True; break
+                    cur = v
+                    found = True
+                    break
             if not found:
                 return None
     try:
-        if isinstance(cur, (int, float)): return float(cur)
+        if isinstance(cur, (int, float)):
+            return float(cur)
         if isinstance(cur, str):
             s = cur.strip().replace(",", "")
             return float(s) if s else None
@@ -153,7 +159,7 @@ def fetch_and_sum(token, acc_id, spec_ids, psize, lang, no_def,
     url = BASE_URL + PATH
     headers = build_headers(token)
     total_input = 0
-    fuel_key = None
+    fuel_key: Optional[str] = None
     pnum = 1
     with requests.Session() as s:
         while True:
@@ -167,54 +173,64 @@ def fetch_and_sum(token, acc_id, spec_ids, psize, lang, no_def,
             r = s.get(url, params=params, headers=headers, timeout=45)
             r.raise_for_status()
             rows = list(iter_payload_rows(r.json()))
-            if not rows: break
+            if not rows:
+                break
             if fuel_key is None:
                 fuel_key = detect_fuel_key(rows[:10])
                 if not fuel_key:
                     raise RuntimeError("Fuel field not detected")
             for rw in rows:
                 v = get_value_by_dotted(rw, fuel_key)
-                if v: total_input += v
-            if len(rows) < psize: break
+                if v:
+                    total_input += v
+            if len(rows) < psize:
+                break
             pnum += 1
     total_lng = lng_to_kg(total_input, lng_unit, lng_density)
     return (total_lng * SAVINGS_PER_KG) / 1000.0
 
-# ======== UI ========
-st.set_page_config(layout="wide")
-
+# ======== UI placeholders ========
 label_box = st.empty()
 number_box = st.empty()
 
+# If token is missing, show message and stop (no rerun loop)
 if not token:
-    label_box.markdown("<div class='label-text'>INTANGLES_TOKEN missing</div>", unsafe_allow_html=True)
-    number_box.markdown("<div class='big-number'>---</div>", unsafe_allow_html=True)
+    label_box.markdown(
+        "<div class='label-text'>INTANGLES_TOKEN missing</div>",
+        unsafe_allow_html=True
+    )
+    number_box.markdown(
+        "<div class='big-number'>---</div>",
+        unsafe_allow_html=True
+    )
     st.stop()
 
-latest_val = 0.0
+# keep latest value across reruns so it never decreases
+if "latest_val" not in st.session_state:
+    st.session_state.latest_val = 0.0
 
-# ========= Update Loop =========
-while True:
-    try:
-        v = fetch_and_sum(
-            token, acc_id, spec_ids, psize, lang, no_def,
-            proj, groups, lastloc, lng_unit, lng_density
-        )
-        latest_val = max(latest_val, v)
-    except Exception as e:
-        print("Intangles API error:", e)
-
-    val = latest_val + ui_offset
-
-    label_box.markdown(
-        "<div class='label-text'>Blue Energy Motors Total tCO₂ saved (tons)</div>",
-        unsafe_allow_html=True
+# ========= One update per run =========
+try:
+    v = fetch_and_sum(
+        token, acc_id, spec_ids, psize, lang, no_def,
+        proj, groups, lastloc, lng_unit, lng_density
     )
+    st.session_state.latest_val = max(st.session_state.latest_val, v)
+except Exception as e:
+    print("Intangles API error:", e)
 
-    number_box.markdown(
-        f"<div class='big-number'>{val:,.3f}</div>",
-        unsafe_allow_html=True
-    )
+val = st.session_state.latest_val + ui_offset
 
-    time.sleep(refresh)
+label_box.markdown(
+    "<div class='label-text'>Blue Energy Motors Total tCO₂ saved (tons)</div>",
+    unsafe_allow_html=True
+)
 
+number_box.markdown(
+    f"<div class='big-number'>{val:,.3f}</div>",
+    unsafe_allow_html=True
+)
+
+# ========= schedule next run =========
+time.sleep(refresh)
+st.rerun()
