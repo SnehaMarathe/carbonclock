@@ -214,4 +214,5 @@ st.metric(label="Total tCO₂ saved (tons)", value=f"{val:,.3f}")
 
 # schedule next run
 time.sleep(max(0.1, float(refresh)))
-st.experimental_rerun()
+st.rerun()
+
