@@ -32,7 +32,7 @@ groups      = ""
 lastloc     = True
 lng_unit    = "kg"
 lng_density = 0.45
-refresh     = 5.0
+refresh     = 1.0
 ui_offset   = 1000.0
 
 # ========= CSS: MAX font size + center alignment =========
@@ -217,3 +217,4 @@ while True:
     )
 
     time.sleep(refresh)
+
