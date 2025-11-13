@@ -90,7 +90,9 @@ def get_value_by_dotted(row: Dict[str, Any], dotted: str) -> Optional[float]:
             found = False
             for k, v in walk_keys(cur):
                 if k.lower() == dotted.lower():
-                    cur = v; found = True; break
+                    cur = v
+                    found = True
+                    break
             if not found:
                 return None
     try:
@@ -112,17 +114,19 @@ def lng_to_kg(v: float, unit: str, density_kg_per_L: float) -> float:
         return float(v) * float(density_kg_per_L)
     raise ValueError("Invalid LNG unit")
 
-def fetch_and_sum(token: str,
-                  acc_id: str,
-                  spec_ids: str,
-                  psize: int,
-                  lang: str,
-                  no_default_fields: bool,
-                  proj: str,
-                  groups: str,
-                  lastloc: bool,
-                  lng_unit: str,
-                  lng_density: float) -> float:
+def fetch_and_sum(
+    token: str,
+    acc_id: str,
+    spec_ids: str,
+    psize: int,
+    lang: str,
+    no_default_fields: bool,
+    proj: str,
+    groups: str,
+    lastloc: bool,
+    lng_unit: str,
+    lng_density: float,
+) -> float:
     url = BASE_URL + PATH
     headers = build_headers(token)
     total_input = 0.0
@@ -197,9 +201,17 @@ status = st.empty()
 if token:
     try:
         v = fetch_and_sum(
-            token=token, acc_id=acc_id, spec_ids=spec_ids, psize=int(psize), lang=lang,
-            no_default_fields=no_def, proj=proj, groups=groups, lastloc=lastloc,
-            lng_unit=lng_unit, lng_density=float(lng_density),
+            token=token,
+            acc_id=acc_id,
+            spec_ids=spec_ids,
+            psize=int(psize),
+            lang=lang,
+            no_default_fields=no_def,
+            proj=proj,
+            groups=groups,
+            lastloc=lastloc,
+            lng_unit=lng_unit,
+            lng_density=float(lng_density),
         )
         st.session_state.latest_val = max(st.session_state.latest_val, v)
         status.info("Live from Intangles API ✅")
@@ -215,4 +227,3 @@ st.metric(label="Total tCO₂ saved (tons)", value=f"{val:,.3f}")
 # schedule next run
 time.sleep(max(0.1, float(refresh)))
 st.rerun()
-
