@@ -20,6 +20,24 @@ PREFERRED_KEYS = [
     "fuel",
 ]
 
+# ========= Fixed configuration (no sidebar) =========
+# Set INTANGLES_TOKEN in Streamlit Cloud -> Settings -> Secrets:
+# INTANGLES_TOKEN = "your_real_token_here"
+token       = os.getenv("INTANGLES_TOKEN", "")
+acc_id      = "962759605811675136"
+spec_ids    = "966986020958502912,969208267156750336"
+psize       = 300
+lang        = "en"
+no_def      = True
+proj        = "total_fuel_consumed"
+groups      = ""
+lastloc     = True
+lng_unit    = "kg"
+lng_density = 0.45
+refresh     = 5.0      # seconds between updates
+ui_offset   = 1000.0   # tons added before display
+
+
 # ==== helpers ====
 def build_headers(token: str) -> Dict[str, str]:
     return {
@@ -50,7 +68,7 @@ def iter_payload_rows(payload: Any):
             if isinstance(val, dict):
                 yield val
                 return
-        # fallback: treat dict as one row
+        # fallback: treat dict as one row if it looks like data
         if any(isinstance(v, (int, float, str, dict, list)) for v in payload.values()):
             yield payload
 
@@ -181,56 +199,35 @@ def fetch_and_sum(
     total_tco2_saved = (total_lng_kg * SAVINGS_PER_KG) / 1000.0
     return total_tco2_saved
 
-# ========= Streamlit UI =========
+
+# ========= Streamlit UI (no sidebar) =========
 st.set_page_config(layout="wide")
 st.title("Blue Energy Motors – Real-Time CO₂ Saved")
 
-with st.sidebar:
-    st.header("Intangles API")
-    token    = st.text_input(
-        "intangles-user-token",
-        value=os.getenv("INTANGLES_TOKEN", ""),
-        type="password",
-    )
-    acc_id   = st.text_input("acc_id", value="962759605811675136")
-    spec_ids = st.text_input(
-        "spec_ids (comma-separated)",
-        value="966986020958502912,969208267156750336",
-    )
-    psize    = st.number_input("psize", min_value=50, max_value=2000, value=300, step=50)
-    lang     = st.text_input("lang", value="en")
-    no_def   = st.checkbox("no_default_fields", value=True)
-    proj     = st.text_input("proj", value="total_fuel_consumed")
-    groups   = st.text_input("groups", value="")
-    lastloc  = st.checkbox("lastloc", value=True)
+# optionally hide Streamlit menu/footer for a clean kiosk view
+st.markdown(
+    """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-    lng_unit    = st.selectbox("LNG unit returned", ["kg", "L"], index=0)
-    lng_density = st.number_input(
-        "LNG density (kg/L if unit = L)",
-        value=0.45,
-        step=0.01,
-        format="%.2f",
-    )
-
-    refresh = st.slider("Refresh every (seconds)", 1.0, 30.0, 5.0, 1.0)
-    ui_offset = st.number_input(
-        "UI offset (tons, added before display)",
-        value=1000.0,
-        step=100.0,
-    )
-
-# if no token, show a static metric and stop (no loop)
 metric_placeholder = st.empty()
+
+# if no token configured, show a static message and stop
 if not token:
     metric_placeholder.metric(
         label="Total tCO₂ saved (tons)",
-        value="—",
+        value="INTANGLES_TOKEN not set",
     )
     st.stop()
 
-# ========= Only number updates (no rerun) =========
-
-latest_val = 0.0  # never decrease across refreshes in this session
+# ========= Only the number updates in a loop =========
+latest_val = 0.0  # never decrease within this run
 
 while True:
     try:
