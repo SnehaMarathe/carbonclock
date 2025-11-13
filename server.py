@@ -38,7 +38,7 @@ UI_OFFSET   = 0.0    # tons added before display
 # cache shared by all requests
 LAST_VALUE: Optional[float] = None
 LAST_TS    = 0.0
-CACHE_TTL  = 5.0      # seconds between background refreshes
+CACHE_TTL  = 1.0      # seconds between background refreshes
 
 # ==== helpers ====
 def build_headers(token: str) -> Dict[str, str]:
