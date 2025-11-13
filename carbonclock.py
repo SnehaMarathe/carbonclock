@@ -207,7 +207,7 @@ while True:
     val = latest_val + ui_offset
 
     label_box.markdown(
-        "<div class='label-text'>Total tCO₂ saved (tons)</div>",
+        "<div class='label-text'>Blue Energy Motors Total tCO₂ saved (tons)</div>",
         unsafe_allow_html=True
     )
 
@@ -217,4 +217,5 @@ while True:
     )
 
     time.sleep(refresh)
+
 
