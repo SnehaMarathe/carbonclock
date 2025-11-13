@@ -1,12 +1,10 @@
-# app.py
+# server.py
 import os
 import time
-import streamlit as st
 from typing import Any, Dict, List, Optional
-import requests
 
-# ===== Streamlit page config =====
-st.set_page_config(layout="wide")
+import requests
+from flask import Flask, jsonify, render_template
 
 # ==== constants ====
 BASE_URL = "https://apis.intangles.com"
@@ -23,55 +21,27 @@ PREFERRED_KEYS = [
     "fuel",
 ]
 
-# ========= Configuration (no sidebar) =========
-token       = os.getenv("INTANGLES_TOKEN", "")
-acc_id      = "962759605811675136"
-spec_ids    = "966986020958502912,969208267156750336"
-psize       = 300
-lang        = "en"
-no_def      = True
-proj        = "total_fuel_consumed"
-groups      = ""
-lastloc     = True
-lng_unit    = "kg"
-lng_density = 0.45
-refresh     = 1.0   # seconds between updates
-ui_offset   = 000.0
+# ==== configuration ====
+INTANGLES_TOKEN = os.getenv("INTANGLES_TOKEN", "")
+ACC_ID      = "962759605811675136"
+SPEC_IDS    = "966986020958502912,969208267156750336"
+PSIZE       = 300
+LANG        = "en"
+NO_DEF      = True
+PROJ        = "total_fuel_consumed"
+GROUPS      = ""
+LASTLOC     = True
+LNG_UNIT    = "kg"
+LNG_DENSITY = 0.45
+UI_OFFSET   = 1000.0   # tons added before display
 
-# ========= CSS: MAX font size + center alignment =========
-st.markdown("""
-<style>
-/* Hide menu/footer */
-#MainMenu {visibility: hidden;}
-footer {visibility: hidden;}
-header {visibility: hidden;}
+# simple cache to avoid hammering API
+LAST_VALUE = None
+LAST_TS    = 0.0
+CACHE_TTL  = 10.0  # seconds
 
-/* Fully center everything */
-.block-container {
-    max-width: 100% !important;
-    padding-top: 5vh;
-    text-align: center !important;
-}
 
-/* Huge number */
-.big-number {
-    font-size: 13rem;         /* MAX SIZE */
-    font-weight: 900;
-    color: #0A74DA;           /* Blue - change if needed */
-    line-height: 1.1;
-}
-
-/* Label text */
-.label-text {
-    font-size: 3rem;
-    font-weight: 500;
-    color: #555;
-    margin-bottom: 20px;
-}
-</style>
-""", unsafe_allow_html=True)
-
-# ================= Helpers =================
+# ==== helpers (copied from your Streamlit logic) ====
 def build_headers(token: str) -> Dict[str, str]:
     return {
         "Accept": "application/json, text/plain, */*",
@@ -104,7 +74,7 @@ def iter_payload_rows(payload: Any):
         if any(isinstance(v, (int, float, str, dict, list)) for v in payload.values()):
             yield payload
 
-def walk_keys(obj: Any, prefix=""):
+def walk_keys(obj: Any, prefix: str = ""):
     if isinstance(obj, dict):
         for k, v in obj.items():
             nk = f"{prefix}.{k}" if prefix else k
@@ -115,12 +85,12 @@ def walk_keys(obj: Any, prefix=""):
     else:
         yield prefix, obj
 
-def detect_fuel_key(sample_rows):
+def detect_fuel_key(sample_rows: List[Dict[str, Any]]) -> Optional[str]:
     candidates = {
         k.lower()
         for row in sample_rows
         for k, v in walk_keys(row)
-        if isinstance(v, (int, float, str))
+        if k and isinstance(v, (int, float, str)) and v is not None
     }
     for pref in PREFERRED_KEYS:
         if pref.lower() in candidates:
@@ -130,9 +100,9 @@ def detect_fuel_key(sample_rows):
             return k
     return None
 
-def get_value_by_dotted(row, dotted):
+def get_value_by_dotted(row: Dict[str, Any], dotted: str) -> Optional[float]:
     parts = dotted.split(".")
-    cur = row
+    cur: Any = row
     for p in parts:
         if isinstance(cur, dict) and p in cur:
             cur = cur[p]
@@ -146,6 +116,8 @@ def get_value_by_dotted(row, dotted):
             if not found:
                 return None
     try:
+        if cur is None:
+            return None
         if isinstance(cur, (int, float)):
             return float(cur)
         if isinstance(cur, str):
@@ -155,28 +127,48 @@ def get_value_by_dotted(row, dotted):
         return None
     return None
 
-def lng_to_kg(v, unit, density):
-    return v if unit.lower() == "kg" else v * density
+def lng_to_kg(v: float, unit: str, density_kg_per_L: float) -> float:
+    if unit.lower() == "kg":
+        return float(v)
+    if unit.lower() == "l":
+        return float(v) * float(density_kg_per_L)
+    raise ValueError("Invalid LNG unit")
 
-def fetch_and_sum(token, acc_id, spec_ids, psize, lang, no_def,
-                  proj, groups, lastloc, lng_unit, lng_density):
+def fetch_and_sum(
+    token: str,
+    acc_id: str,
+    spec_ids: str,
+    psize: int,
+    lang: str,
+    no_default_fields: bool,
+    proj: str,
+    groups: str,
+    lastloc: bool,
+    lng_unit: str,
+    lng_density: float,
+) -> float:
     url = BASE_URL + PATH
     headers = build_headers(token)
-    total_input = 0
+    total_input = 0.0
     fuel_key: Optional[str] = None
     pnum = 1
     with requests.Session() as s:
         while True:
             params = {
-                "pnum": pnum, "psize": psize,
-                "no_default_fields": str(no_def).lower(),
-                "proj": proj, "spec_ids": spec_ids,
-                "groups": groups, "lastloc": str(lastloc).lower(),
-                "acc_id": acc_id, "lang": lang,
+                "pnum": pnum,
+                "psize": psize,
+                "no_default_fields": str(no_default_fields).lower(),
+                "proj": proj,
+                "spec_ids": spec_ids,
+                "groups": groups,
+                "lastloc": str(lastloc).lower(),
+                "acc_id": acc_id,
+                "lang": lang,
             }
             r = s.get(url, params=params, headers=headers, timeout=45)
             r.raise_for_status()
-            rows = list(iter_payload_rows(r.json()))
+            payload = r.json()
+            rows = list(iter_payload_rows(payload))
             if not rows:
                 break
             if fuel_key is None:
@@ -190,48 +182,52 @@ def fetch_and_sum(token, acc_id, spec_ids, psize, lang, no_def,
             if len(rows) < psize:
                 break
             pnum += 1
-    total_lng = lng_to_kg(total_input, lng_unit, lng_density)
-    return (total_lng * SAVINGS_PER_KG) / 1000.0
 
-# ======== UI placeholders ========
-label_box = st.empty()
-number_box = st.empty()
+    total_lng_kg = lng_to_kg(total_input, lng_unit, lng_density)
+    total_tco2_saved = (total_lng_kg * SAVINGS_PER_KG) / 1000.0
+    return total_tco2_saved
 
-if not token:
-    label_box.markdown(
-        "<div class='label-text'>INTANGLES_TOKEN missing</div>",
-        unsafe_allow_html=True
-    )
-    number_box.markdown(
-        "<div class='big-number'>---</div>",
-        unsafe_allow_html=True
-    )
-    st.stop()
+# ==== Flask app ====
+app = Flask(__name__)
 
-latest_val = 0.0  # local “never decrease within this run”
+@app.route("/")
+def index():
+    return render_template("index.html")
 
-# ========= Smooth update loop (no rerun, no blinking) =========
-while True:
-    try:
-        v = fetch_and_sum(
-            token, acc_id, spec_ids, psize, lang, no_def,
-            proj, groups, lastloc, lng_unit, lng_density
-        )
-        latest_val = max(latest_val, v)
-    except Exception as e:
-        print("Intangles API error:", e)
+@app.route("/value")
+def get_value():
+    global LAST_VALUE, LAST_TS
 
-    val = latest_val + ui_offset
+    if not INTANGLES_TOKEN:
+        return jsonify({"error": "INTANGLES_TOKEN not set on server"}), 500
 
-    label_box.markdown(
-        "<div class='label-text'>Blue Energy Motors Total tCO₂ saved (tons)</div>",
-        unsafe_allow_html=True
-    )
+    now = time.time()
+    if LAST_VALUE is not None and (now - LAST_TS) < CACHE_TTL:
+        val = LAST_VALUE
+    else:
+        try:
+            raw_value = fetch_and_sum(
+                INTANGLES_TOKEN,
+                ACC_ID,
+                SPEC_IDS,
+                PSIZE,
+                LANG,
+                NO_DEF,
+                PROJ,
+                GROUPS,
+                LASTLOC,
+                LNG_UNIT,
+                LNG_DENSITY,
+            )
+            val = raw_value + UI_OFFSET
+            LAST_VALUE = val
+            LAST_TS = now
+        except Exception as e:
+            print("Intangles API error:", repr(e))
+            return jsonify({"error": "API error", "detail": str(e)}), 500
 
-    number_box.markdown(
-        f"<div class='big-number'>{val:,.3f}</div>",
-        unsafe_allow_html=True
-    )
+    return jsonify({"value": round(val, 3)})
 
-    time.sleep(refresh)
-
+if __name__ == "__main__":
+    # For local testing; Render will ignore this and use its own command
+    app.run(host="0.0.0.0", port=8000, debug=False)
