@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Blue Energy Motors – CO₂ Saved</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #000000;
+            color: #0A74DA;
+            font-family: Arial, sans-serif;
+        }
+
+        .container {
+            width: 100%;
+            height: 100%;
+            text-align: center;
+            display: table;
+        }
+
+        .content {
+            display: table-cell;
+            vertical-align: middle;
+        }
+
+        .label-text {
+            font-size: 48px;
+            font-weight: 500;
+            color: #bbbbbb;
+            margin-bottom: 20px;
+        }
+
+        .big-number {
+            font-size: 160px;
+            font-weight: 900;
+            color: #0A74DA;
+            line-height: 1.1;
+        }
+
+        .error-text {
+            font-size: 32px;
+            color: #ff5555;
+            margin-top: 30px;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="content">
+        <div class="label-text">
+            Blue Energy Motors Total tCO₂ saved (tons)
+        </div>
+        <div id="value" class="big-number">
+            ...
+        </div>
+        <div id="error" class="error-text"></div>
+    </div>
+</div>
+
+<script type="text/javascript">
+    function fetchValue() {
+        var xhr = new XMLHttpRequest();
+        xhr.open("GET", "/value", true);
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4) {
+                var valueElem = document.getElementById("value");
+                var errorElem = document.getElementById("error");
+
+                if (xhr.status === 200) {
+                    try {
+                        var data = JSON.parse(xhr.responseText);
+                        if (data.value !== undefined && data.value !== null) {
+                            var num = Number(data.value);
+                            var text = num.toLocaleString(undefined, {
+                                minimumFractionDigits: 3,
+                                maximumFractionDigits: 3
+                            });
+                            valueElem.innerHTML = text;
+                            errorElem.innerHTML = "";
+                        } else {
+                            errorElem.innerHTML = "Invalid data from server";
+                        }
+                    } catch (e) {
+                        errorElem.innerHTML = "Parse error";
+                    }
+                } else {
+                    errorElem.innerHTML = "Error fetching data (" + xhr.status + ")";
+                }
+            }
+        };
+        xhr.send();
+    }
+
+    // initial load
+    fetchValue();
+    // refresh every second
+    setInterval(fetchValue, 1000);
+</script>
+</body>
+</html>
