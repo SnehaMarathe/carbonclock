@@ -34,7 +34,7 @@ groups      = ""
 lastloc     = True
 lng_unit    = "kg"
 lng_density = 0.45
-refresh     = 5.0      # seconds between updates
+refresh     = 1.0      # seconds between updates
 ui_offset   = 1000.0   # tons added before display
 
 
@@ -256,3 +256,4 @@ while True:
     )
 
     time.sleep(float(refresh))
+
