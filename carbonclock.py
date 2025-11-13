@@ -1,8 +1,12 @@
 # app.py
-import os, time
+import os
 import streamlit as st
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 import requests
+
+# If not installed yet, add to requirements.txt:
+# streamlit-autorefresh
+from streamlit_autorefresh import st_autorefresh
 
 # ==== your constants ====
 BASE_URL = "https://apis.intangles.com"
@@ -189,15 +193,20 @@ with st.sidebar:
     lng_unit    = st.selectbox("LNG unit returned", ["kg", "L"], index=0)
     lng_density = st.number_input("LNG density (kg/L if unit = L)", value=0.45, step=0.01, format="%.2f")
 
+    # Keep this slider, but now it controls st_autorefresh interval
     refresh = st.slider("Refresh every (seconds)", 0.3, 5.0, 0.5, 0.1)
     ui_offset = st.number_input("UI offset (tons, added before display)", value=1000.0, step=100.0)
+
+# auto-refresh the whole app at the chosen interval (in ms)
+st_autorefresh(interval=int(refresh * 1000), key="api_refresh")
 
 # sticky state: never decrease
 if "latest_val" not in st.session_state:
     st.session_state.latest_val = 0.0
 
-# fetch (once per run)
 status = st.empty()
+
+# fetch (once per run)
 if token:
     try:
         v = fetch_and_sum(
@@ -223,7 +232,3 @@ else:
 # display (+ offset)
 val = st.session_state.latest_val + float(ui_offset)
 st.metric(label="Total tCO₂ saved (tons)", value=f"{val:,.3f}")
-
-# schedule next run
-time.sleep(max(0.1, float(refresh)))
-st.rerun()
