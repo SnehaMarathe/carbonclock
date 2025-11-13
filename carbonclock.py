@@ -20,9 +20,7 @@ PREFERRED_KEYS = [
     "fuel",
 ]
 
-# ========= Fixed configuration (no sidebar) =========
-# Set INTANGLES_TOKEN in Streamlit Cloud -> Settings -> Secrets:
-# INTANGLES_TOKEN = "your_real_token_here"
+# ========= Configuration (no sidebar) =========
 token       = os.getenv("INTANGLES_TOKEN", "")
 acc_id      = "962759605811675136"
 spec_ids    = "966986020958502912,969208267156750336"
@@ -34,11 +32,43 @@ groups      = ""
 lastloc     = True
 lng_unit    = "kg"
 lng_density = 0.45
-refresh     = 1.0      # seconds between updates
-ui_offset   = 1000.0   # tons added before display
+refresh     = 5.0
+ui_offset   = 1000.0
 
+# ========= CSS: MAX font size + center alignment =========
+st.markdown("""
+<style>
+/* Hide menu/footer */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
 
-# ==== helpers ====
+/* Fully center everything */
+.block-container {
+    max-width: 100% !important;
+    padding-top: 5vh;
+    text-align: center !important;
+}
+
+/* Huge number */
+.big-number {
+    font-size: 13rem;         /* MAX SIZE */
+    font-weight: 900;
+    color: #0A74DA;           /* Blue - change if needed */
+    line-height: 1.1;
+}
+
+/* Label text */
+.label-text {
+    font-size: 3rem;
+    font-weight: 500;
+    color: #555;
+    margin-bottom: 20px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ================= Helpers =================
 def build_headers(token: str) -> Dict[str, str]:
     return {
         "Accept": "application/json, text/plain, */*",
@@ -68,11 +98,10 @@ def iter_payload_rows(payload: Any):
             if isinstance(val, dict):
                 yield val
                 return
-        # fallback: treat dict as one row if it looks like data
         if any(isinstance(v, (int, float, str, dict, list)) for v in payload.values()):
             yield payload
 
-def walk_keys(obj: Any, prefix: str = ""):
+def walk_keys(obj: Any, prefix=""):
     if isinstance(obj, dict):
         for k, v in obj.items():
             nk = f"{prefix}.{k}" if prefix else k
@@ -83,26 +112,20 @@ def walk_keys(obj: Any, prefix: str = ""):
     else:
         yield prefix, obj
 
-def detect_fuel_key(sample_rows: List[Dict[str, Any]]) -> Optional[str]:
-    candidates: Dict[str, None] = {}
-    for row in sample_rows:
-        for k, v in walk_keys(row):
-            if not k:
-                continue
-            if isinstance(v, (int, float, str)) and v is not None:
-                candidates[k.lower()] = None
-    lowers = set(candidates.keys())
+def detect_fuel_key(sample_rows):
+    candidates = {k.lower() for row in sample_rows for k, v in walk_keys(row)
+                  if isinstance(v, (int, float, str))}
     for pref in PREFERRED_KEYS:
-        if pref.lower() in lowers:
+        if pref.lower() in candidates:
             return pref
-    for k in lowers:
+    for k in candidates:
         if "fuel" in k and ("consum" in k or "total" in k):
             return k
     return None
 
-def get_value_by_dotted(row: Dict[str, Any], dotted: str) -> Optional[float]:
+def get_value_by_dotted(row, dotted):
     parts = dotted.split(".")
-    cur: Any = row
+    cur = row
     for p in parts:
         if isinstance(cur, dict) and p in cur:
             cur = cur[p]
@@ -110,150 +133,87 @@ def get_value_by_dotted(row: Dict[str, Any], dotted: str) -> Optional[float]:
             found = False
             for k, v in walk_keys(cur):
                 if k.lower() == dotted.lower():
-                    cur = v
-                    found = True
-                    break
+                    cur = v; found = True; break
             if not found:
                 return None
     try:
-        if cur is None:
-            return None
-        if isinstance(cur, (int, float)):
-            return float(cur)
+        if isinstance(cur, (int, float)): return float(cur)
         if isinstance(cur, str):
             s = cur.strip().replace(",", "")
             return float(s) if s else None
-    except Exception:
+    except:
         return None
     return None
 
-def lng_to_kg(v: float, unit: str, density_kg_per_L: float) -> float:
-    if unit.lower() == "kg":
-        return float(v)
-    if unit.lower() == "l":
-        return float(v) * float(density_kg_per_L)
-    raise ValueError("Invalid LNG unit")
+def lng_to_kg(v, unit, density):
+    return v if unit.lower() == "kg" else v * density
 
-def fetch_and_sum(
-    token: str,
-    acc_id: str,
-    spec_ids: str,
-    psize: int,
-    lang: str,
-    no_default_fields: bool,
-    proj: str,
-    groups: str,
-    lastloc: bool,
-    lng_unit: str,
-    lng_density: float,
-) -> float:
-    """
-    Backend: call Intangles, detect fuel field, sum pages,
-    convert to LNG kg and then to tCO₂ saved.
-    """
+def fetch_and_sum(token, acc_id, spec_ids, psize, lang, no_def,
+                  proj, groups, lastloc, lng_unit, lng_density):
     url = BASE_URL + PATH
     headers = build_headers(token)
-    total_input = 0.0
-    fuel_key: Optional[str] = None
+    total_input = 0
+    fuel_key = None
     pnum = 1
-
     with requests.Session() as s:
         while True:
             params = {
-                "pnum": pnum,
-                "psize": psize,
-                "no_default_fields": str(no_default_fields).lower(),
-                "proj": proj,
-                "spec_ids": spec_ids,
-                "groups": groups,
-                "lastloc": str(lastloc).lower(),
-                "acc_id": acc_id,
-                "lang": lang,
+                "pnum": pnum, "psize": psize,
+                "no_default_fields": str(no_def).lower(),
+                "proj": proj, "spec_ids": spec_ids,
+                "groups": groups, "lastloc": str(lastloc).lower(),
+                "acc_id": acc_id, "lang": lang,
             }
-            resp = s.get(url, params=params, headers=headers, timeout=45)
-            resp.raise_for_status()
-            payload = resp.json()
-            rows = list(iter_payload_rows(payload))
-            if not rows:
-                break
-
+            r = s.get(url, params=params, headers=headers, timeout=45)
+            r.raise_for_status()
+            rows = list(iter_payload_rows(r.json()))
+            if not rows: break
             if fuel_key is None:
-                sample = rows[:10]
-                detected = detect_fuel_key(sample)
-                if not detected:
-                    raise RuntimeError("Could not detect a fuel field in response.")
-                fuel_key = detected
-
-            page_sum = 0.0
-            for r in rows:
-                v = get_value_by_dotted(r, fuel_key)
-                if v is not None:
-                    page_sum += v
-            total_input += page_sum
-
-            if len(rows) < psize:
-                break
+                fuel_key = detect_fuel_key(rows[:10])
+                if not fuel_key:
+                    raise RuntimeError("Fuel field not detected")
+            for rw in rows:
+                v = get_value_by_dotted(rw, fuel_key)
+                if v: total_input += v
+            if len(rows) < psize: break
             pnum += 1
+    total_lng = lng_to_kg(total_input, lng_unit, lng_density)
+    return (total_lng * SAVINGS_PER_KG) / 1000.0
 
-    total_lng_kg = lng_to_kg(total_input, lng_unit, lng_density)
-    total_tco2_saved = (total_lng_kg * SAVINGS_PER_KG) / 1000.0
-    return total_tco2_saved
-
-
-# ========= Streamlit UI (no sidebar) =========
+# ======== UI ========
 st.set_page_config(layout="wide")
-st.title("Blue Energy Motors – Real-Time CO₂ Saved")
 
-# optionally hide Streamlit menu/footer for a clean kiosk view
-st.markdown(
-    """
-    <style>
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+label_box = st.empty()
+number_box = st.empty()
 
-metric_placeholder = st.empty()
-
-# if no token configured, show a static message and stop
 if not token:
-    metric_placeholder.metric(
-        label="Total tCO₂ saved (tons)",
-        value="INTANGLES_TOKEN not set",
-    )
+    label_box.markdown("<div class='label-text'>INTANGLES_TOKEN missing</div>", unsafe_allow_html=True)
+    number_box.markdown("<div class='big-number'>---</div>", unsafe_allow_html=True)
     st.stop()
 
-# ========= Only the number updates in a loop =========
-latest_val = 0.0  # never decrease within this run
+latest_val = 0.0
 
+# ========= Update Loop =========
 while True:
     try:
         v = fetch_and_sum(
-            token=token,
-            acc_id=acc_id,
-            spec_ids=spec_ids,
-            psize=int(psize),
-            lang=lang,
-            no_default_fields=no_def,
-            proj=proj,
-            groups=groups,
-            lastloc=lastloc,
-            lng_unit=lng_unit,
-            lng_density=float(lng_density),
+            token, acc_id, spec_ids, psize, lang, no_def,
+            proj, groups, lastloc, lng_unit, lng_density
         )
         latest_val = max(latest_val, v)
     except Exception as e:
-        # keep previous value on error, log to server logs only
-        print("Intangles API error:", repr(e))
+        print("Intangles API error:", e)
 
-    val_to_show = latest_val + float(ui_offset)
-    metric_placeholder.metric(
-        label="Total tCO₂ saved (tons)",
-        value=f"{val_to_show:,.3f}",
+    val = latest_val + ui_offset
+
+    label_box.markdown(
+        "<div class='label-text'>Total tCO₂ saved (tons)</div>",
+        unsafe_allow_html=True
     )
 
-    time.sleep(float(refresh))
+    number_box.markdown(
+        f"<div class='big-number'>{val:,.3f}</div>",
+        unsafe_allow_html=True
+    )
 
+    time.sleep(refresh)
