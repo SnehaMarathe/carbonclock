@@ -38,7 +38,11 @@ UI_OFFSET   = 0.0    # tons added before display
 # cache shared by all requests
 LAST_VALUE: Optional[float] = None
 LAST_TS    = 0.0
-CACHE_TTL  = 5.0      # seconds between background refreshes
+CACHE_TTL  = 1.0      # seconds between background refreshes
+
+# flag to start background thread only once
+background_started = False
+background_lock = threading.Lock()
 
 # ==== helpers ====
 def build_headers(token: str) -> Dict[str, str]:
@@ -215,12 +219,18 @@ def background_updater():
             print("INTANGLES_TOKEN not set; background updater idle")
         time.sleep(CACHE_TTL)
 
-app = Flask(__name__)
+app = Flask(__name__)  # looks for templates/index.html by default
 
-@app.before_first_request
-def start_background_thread():
-    t = threading.Thread(target=background_updater, daemon=True)
-    t.start()
+@app.before_request
+def ensure_background_thread():
+    global background_started
+    if not background_started:
+        with background_lock:
+            if not background_started:
+                t = threading.Thread(target=background_updater, daemon=True)
+                t.start()
+                background_started = True
+                print("Background updater thread started")
 
 # ==== routes ====
 @app.route("/")
