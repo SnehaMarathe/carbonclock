@@ -1,5 +1,6 @@
 # app.py
-import os, time
+import os
+import time
 import streamlit as st
 from typing import Any, Dict, List, Optional
 import requests
@@ -19,7 +20,7 @@ PREFERRED_KEYS = [
     "fuel",
 ]
 
-# ==== helpers (same behaviour as your original) ====
+# ==== helpers ====
 def build_headers(token: str) -> Dict[str, str]:
     return {
         "Accept": "application/json, text/plain, */*",
@@ -49,7 +50,7 @@ def iter_payload_rows(payload: Any):
             if isinstance(val, dict):
                 yield val
                 return
-        # last-resort: treat dict as one row if it looks like data
+        # fallback: treat dict as one row
         if any(isinstance(v, (int, float, str, dict, list)) for v in payload.values()):
             yield payload
 
@@ -72,15 +73,10 @@ def detect_fuel_key(sample_rows: List[Dict[str, Any]]) -> Optional[str]:
                 continue
             if isinstance(v, (int, float, str)) and v is not None:
                 candidates[k.lower()] = None
-
     lowers = set(candidates.keys())
-
-    # try known keys in preferred order
     for pref in PREFERRED_KEYS:
         if pref.lower() in lowers:
             return pref
-
-    # heuristic fallback
     for k in lowers:
         if "fuel" in k and ("consum" in k or "total" in k):
             return k
@@ -93,7 +89,6 @@ def get_value_by_dotted(row: Dict[str, Any], dotted: str) -> Optional[float]:
         if isinstance(cur, dict) and p in cur:
             cur = cur[p]
         else:
-            # fallback: search full dotted key case-insensitively
             found = False
             for k, v in walk_keys(cur):
                 if k.lower() == dotted.lower():
@@ -224,15 +219,20 @@ with st.sidebar:
         step=100.0,
     )
 
-# sticky state: never decrease
-if "latest_val" not in st.session_state:
-    st.session_state.latest_val = 0.0
-
-# placeholder ONLY for the metric
+# if no token, show a static metric and stop (no loop)
 metric_placeholder = st.empty()
+if not token:
+    metric_placeholder.metric(
+        label="Total tCO₂ saved (tons)",
+        value="—",
+    )
+    st.stop()
 
-# backend call – no UI text, no logs to the page
-if token:
+# ========= Only number updates (no rerun) =========
+
+latest_val = 0.0  # never decrease across refreshes in this session
+
+while True:
     try:
         v = fetch_and_sum(
             token=token,
@@ -247,18 +247,15 @@ if token:
             lng_unit=lng_unit,
             lng_density=float(lng_density),
         )
-        st.session_state.latest_val = max(st.session_state.latest_val, v)
+        latest_val = max(latest_val, v)
     except Exception as e:
-        # keep previous value, but log to server (not UI)
+        # keep previous value on error, log to server logs only
         print("Intangles API error:", repr(e))
 
-# display (+ offset)
-val_to_show = st.session_state.latest_val + float(ui_offset)
-metric_placeholder.metric(
-    label="Total tCO₂ saved (tons)",
-    value=f"{val_to_show:,.3f}",
-)
+    val_to_show = latest_val + float(ui_offset)
+    metric_placeholder.metric(
+        label="Total tCO₂ saved (tons)",
+        value=f"{val_to_show:,.3f}",
+    )
 
-# auto-refresh: app reruns, only number visually changes
-time.sleep(float(refresh))
-st.rerun()
+    time.sleep(float(refresh))
